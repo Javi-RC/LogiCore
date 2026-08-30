@@ -1,0 +1,50 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      routes:
+        - id: user-service
+          uri: ${USER_SERVICE_URI:http://localhost:8100}
+          predicates:
+            - Path=/api/auth/**,/api/users/**
+        - id: product-service
+          uri: ${PRODUCT_SERVICE_URI:http://localhost:8101}
+          predicates:
+            - Path=/api/products/**
+        - id: inventory-service
+          uri: ${INVENTORY_SERVICE_URI:http://localhost:8102}
+          predicates:
+            - Path=/api/inventory/**
+        - id: order-service
+          uri: ${ORDER_SERVICE_URI:http://localhost:8103}
+          predicates:
+            - Path=/api/orders/**
+        - id: shipping-service
+          uri: ${SHIPPING_SERVICE_URI:http://localhost:8104}
+          predicates:
+            - Path=/api/shipments/**
+        - id: notification-service
+          uri: ${NOTIFICATION_SERVICE_URI:http://localhost:8105}
+          predicates:
+            - Path=/api/notifications/**
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: "*"
+            allowedMethods: "*"
+            allowedHeaders: "*"
+  main:
+    web-application-type: reactive
+
+jwt:
+  secret: ${JWT_SECRET:logicore-dev-secret-change-me-in-production!}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
