@@ -70,13 +70,13 @@ class InventoryConcurrencyIT {
                 () -> {
                     start.await();
                     reserveStockUseCase.reserve(
-                            new ReserveStockCommand("order-a", ProductId.of(productId), 8));
+                            new ReserveStockCommand(UUID.randomUUID().toString(), ProductId.of(productId), 8));
                     return true;
                 },
                 () -> {
                     start.await();
                     reserveStockUseCase.reserve(
-                            new ReserveStockCommand("order-b", ProductId.of(productId), 8));
+                            new ReserveStockCommand(UUID.randomUUID().toString(), ProductId.of(productId), 8));
                     return true;
                 }
         );
