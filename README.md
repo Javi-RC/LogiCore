@@ -47,6 +47,156 @@ Full plan and decisions: [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLA
 
 ---
 
+## UML diagrams
+
+All diagrams (rendered with GitHub-Mermaid) live in [`docs/UML.md`](docs/UML.md). The three most important:
+
+**1. System architecture** — one gateway, six services, one database per service, Kafka as the async backbone.
+
+```mermaid
+flowchart LR
+    Client["Client or curl"]
+
+    subgraph GW["API Gateway :8080"]
+        JWT["JwtTokenParser + GatewaySecurityFilter<br/>validates JWT - injects X-User-Id / X-User-Email / X-User-Roles"]
+    end
+
+    subgraph SVC["Microservices"]
+        USR["User Service :8100<br/>users, roles, JWT issuer"]
+        PRD["Product Service :8101<br/>catalog (Money, Sku)"]
+        INV["Inventory Service :8102<br/>stock register, reserve, release"]
+        ORD["Order Service :8103<br/>order lifecycle"]
+        SHP["Shipping Service :8104<br/>shipment lifecycle"]
+        NTF["Notification Service :8105<br/>records business notifications"]
+    end
+
+    subgraph KF["Kafka 7.6 broker"]
+        K["order-events<br/>inventory-events<br/>shipment-events"]
+        KUI["Kafka UI :8081"]
+    end
+
+    subgraph DB["PostgreSQL 16 - database per service"]
+        DBU["user_db"]
+        DBP["product_db"]
+        DBI["inventory_db"]
+        DBO["order_db"]
+        DBS["shipping_db"]
+        DBN["notification_db"]
+    end
+
+    Client --> GW
+    GW --> USR & PRD & INV & ORD & SHP & NTF
+    USR <--> DBU
+    PRD <--> DBP
+    INV <--> DBI
+    ORD <--> DBO
+    SHP <--> DBS
+    NTF <--> DBN
+    ORD <--> K
+    INV <--> K
+    SHP <--> K
+    NTF <--> K
+    K --> KUI
+```
+
+**2. Hexagonal architecture** — same shape in every service (example: `inventory-service`). Arrows point inward; the domain is free of Spring/JPA/Kafka.
+
+```mermaid
+classDiagram
+    direction LR
+    class InventoryItem {
+        -availableQuantity: int
+        -reservedQuantity: int
+        -version: Long
+        +create(productId, quantity) InventoryItem
+        +reserve(quantity) InventoryItem
+        +release(quantity) InventoryItem
+        +confirm(quantity) InventoryItem
+    }
+    class ReserveStockUseCase {
+        <<interface>>
+        +reserve(command) InventoryItemResponse
+    }
+    class ReserveStockApplicationService {
+        +reserve(command) InventoryItemResponse
+    }
+    class InventoryRepository {
+        <<interface>>
+        +save(item) InventoryItem
+        +findByProductId(ProductId) Optional~InventoryItem~
+    }
+    class InventoryEventPublisher {
+        <<interface>>
+        +publish(DomainEvent)
+    }
+    class InventoryPersistenceAdapter {
+        +save(item) InventoryItem
+        +findByProductId(ProductId) Optional~InventoryItem~
+    }
+    class InventoryItemJpaRepository {
+        <<interface>>
+    }
+    class KafkaInventoryEventPublisher {
+        +publish(DomainEvent)
+    }
+    class OrderEventKafkaConsumer {
+        +onOrderEvent(DomainEvent)
+    }
+    class InventoryController {
+        +POST registerStock
+        +POST reserve(productId, qty)
+        +POST release(productId, qty)
+        +GET getStock(productId)
+    }
+    ReserveStockUseCase <|.. ReserveStockApplicationService : implements
+    ReserveStockApplicationService --> InventoryRepository : uses (port)
+    ReserveStockApplicationService --> InventoryEventPublisher : publishes (port)
+    InventoryPersistenceAdapter ..|> InventoryRepository : adapter
+    InventoryPersistenceAdapter --> InventoryItemJpaRepository : Spring Data
+    KafkaInventoryEventPublisher ..|> InventoryEventPublisher : adapter
+    OrderEventKafkaConsumer --> ReserveStockApplicationService : calls
+    InventoryController --> ReserveStockApplicationService : calls
+```
+
+**3. Order saga — happy path** — the async choreography: `OrderCreated` → reserve → `StockReserved` → `OrderConfirmed` → shipment → notifications.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant GW as "API Gateway :8080"
+    participant ORD as "Order Service :8103"
+    participant PRD as "Product Service :8101"
+    participant DBO as "order_db"
+    participant K as "Kafka"
+    participant INV as "Inventory Service :8102"
+    participant SHP as "Shipping Service :8104"
+    participant NTF as "Notification Service :8105"
+
+    Client->>GW: POST /api/orders (Bearer JWT)
+    GW->>ORD: POST /api/orders (X-User-Id)
+    ORD->>PRD: GET /api/products/{id} (price check)
+    PRD-->>ORD: product price
+    ORD->>DBO: persist order (PENDING)
+    ORD->>K: publish OrderCreated (order-events)
+    K-->>INV: OrderCreated
+    INV->>INV: reserve stock per line - optimistic lock
+    INV->>K: publish StockReserved (inventory-events)
+    K-->>ORD: StockReserved
+    ORD->>DBO: order - CONFIRMED
+    ORD->>K: publish OrderConfirmed (order-events)
+    K-->>SHP: OrderConfirmed
+    SHP->>SHP: create shipment (CREATED)
+    SHP->>K: publish ShipmentCreated (shipment-events)
+    K-->>NTF: order and shipment events
+    NTF->>NTF: record notification for customer
+    Note over Client: GET /api/orders/{id} - status PENDING, then CONFIRMED
+```
+
+Also in [`docs/UML.md`](docs/UML.md): **saga failure + compensation**, **JWT authentication flow**, and the **Order / Shipment state machines**.
+
+---
+
 ## Quick start
 
 Prerequisites: **JDK 17**, **Maven 3.9+**, **Docker** (for the integration tests and infra).
